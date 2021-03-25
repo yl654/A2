@@ -1,0 +1,176 @@
+---
+title: "Assignment 2: Multinomial Choices"
+author: "Yongyi Lin"
+date: "3/24/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(tidyverse)
+library(bayesm)
+```
+
+```{r dataset}
+setwd("/Users/yongyilin/Econ613/Assignments/A2")
+data(margarine)
+```
+
+## Exercise 1 Data Description
+```{r Exercise 1}
+choiceprice <- margarine$choicePrice
+demos <- margarine$demos
+### Average and dispersion in product characteristics
+prod_avg <- as.matrix(apply(choiceprice[,2:12], 2, mean))
+prod_avg
+prod_disp <- as.matrix(apply(choiceprice[,2:12], 2, sd))
+prod_disp
+### Market share and market share by product characteristics
+prod_share = as.matrix(summary(as.factor(choiceprice[,2])))/nrow(choiceprice)
+prod_share
+
+mar <- merge(x = choiceprice, y = demos, by = "hhid", all.x = TRUE)
+### Mapping between income and choice
+table(mar[,c(2,13)])
+### Mapping between family size and choice
+table(mar[,c(2,14)])
+table(mar[,c(2,15)])
+table(mar[,c(2,16)])
+### Mapping between education status and choice
+table(mar[,c(2,17)])
+### Mapping between job status and choice
+table(mar[,c(2,18)])
+### Mapping between retirement status and choice
+table(mar[,c(2,19)])
+```
+
+
+```{r}
+choice <- 1:10
+names(choice) <- 1:10
+y <- as.matrix(map_df(choice, function(x) as.integer(choiceprice$choice == x)))
+```
+## Exercise 2 First Model
+### Conditional Logit Model
+```{r Exercise 2}
+# Exercise 2 First Model
+# Conditional logit model
+x_1 <- mar[,3:12]
+conl_p <- function(x,b) {
+  pn <- exp(matrix(rep(c(0,b[1:9]),nrow(x)),byrow = TRUE,nrow(x))+x*b[10])
+  pd <- apply(pn,1,sum)
+  return(pn/pd)
+}
+conl_ll <- function(y,x,b) {
+  l <- -sum(y*log(conl_p(x,b)))
+  return(l)
+}
+conl <- optim(function(b) conl_ll(y=y,x=x_1,b=b),par=rep(0,10),method="BFGS")
+conl$par
+```
+#### The 10th parameter refers to the effect of price. The negative coefficient (-6.6566340) indicates that individual would be less likely to purchase the product as the price increases.
+
+## Exercise 3 Second Model
+### Multinomial Logit Model
+```{r Exercise 3}
+# Exercise 3 Second Model
+# Multinomial logit model
+x_2 <- as.matrix(mar[,13],ncol=1)
+colnames(x_2)[1] <- "income"
+multil_p <- function(x,b) {
+  pn <- exp(matrix(rep(c(0,b[1:9]),nrow(x)),byrow=TRUE,nrow(x))
+                   +t(apply(x,1,function(x)x*c(0,b[10:18]))))
+  pd <- matrix(apply(pn,1,sum)) %*% t(rep(1,10))
+  return(pn/pd)
+}
+multil_ll <- function(y,x,b) {
+  l <- -sum(y*log(multil_p(x,b)))
+  return(l)
+}
+multil <- optim(function(b) multil_ll(y=y,x=x_2,b=b),par=rep(0,18),method="BFGS")
+multil$par
+```
+#### The last 9 parameters are the income effects of products 2~10. Thus, an individual would be more likely to purchase product 3, 4, 6, 8, 9, and 10, and less likely to purchase product 2, 5, and 7.
+
+## Exercise 4 Marginal Effects
+### Conditional Logit Model
+```{r Exercise 4_1}
+# Marginal effect for the first model
+p_conl <- conl_p(x_1,conl$par)
+ind <- array(0, dim=c(nrow(x_1),ncol(x_1),ncol(x_1)))
+for (i in 1:nrow(x_1)) {
+  diag(ind[i,,]) <- 1
+}
+me_conl <- array(0, dim=c(nrow(x_1),ncol(x_1),ncol(x_1)))
+for (i in 1:nrow(x_1)) {
+  for (j in 1:ncol(x_1)) {
+    for (k in 1:ncol(x_1)) {
+      me_conl[i,j,k] <- p_conl[i,j]*(ind[i,j,k]-p_conl[i,k])*conl$par[10]
+    }
+  }
+}
+apply(me_conl,c(2,3),mean)
+```
+#### As one can see from the matrix, only diagonal elements are negative whereas all the other elements are positive. This indicates that an individual would turn to other products, if the price of a given product increased, which is very intuitive and makes perfect sense.
+
+### Multinomial Logit Model
+```{r Exercise 4_2}
+# Marginal effect for the second model
+p_multil <- multil_p(x_2,multil$par)
+b_multil <- c(0,multil$par[10:18])
+me_multil <- array(0,dim=c(nrow(x_2),10))
+for (i in 1:nrow(x_2)) {
+  b_bar <- sum(p_multil[i,]*b_multil)
+  for (j in 1:10) {
+    me_multil[i,j] <- p_multil[i,j]*(b_multil[j]-b_bar)
+  }
+}
+for (i in 1:nrow(x_2)) {
+  b_bar <- sum(p_multil[i,]*b_multil)
+  me_multil[i,] <- p_multil[i,]*(b_multil-b_bar)
+}
+apply(me_multil,2,mean)
+```
+#### In this model, an individual would purchase product 1, 2, 5, and 7 more if his or her income increased.
+
+## Exercise 5 IIA
+```{r Exercise 5}
+mix_ll <- function(y,x,b,p_mix) {
+  return(-sum(y*log(p_mix(x,b))))
+}
+# Mixed logit with all choices
+X_1 <- as.matrix(mar[,3:13])
+p_mix_1 <- function(x,b) {
+  pn <- exp(
+    matrix(rep(c(0,b[1:9]),nrow(x)),
+           byrow=TRUE,
+           nrow(x))
+    +x[,1:10]*b[10]
+    +t(apply(matrix(x[,11],ncol=1),1,function(x) x*c(0,b[11:19])))
+  )
+  pd <- apply(pn,1,sum)
+  return(pn/pd)
+}
+mixl_1 <- optim(function(b) mix_ll(y=y,x=X_1,b=b,p_mix=p_mix_1),par=rep(0,19),method="BFGS")
+mixl_1$par
+# Alternative specification: remove the fifth choice
+X_2 <- X_1[,-5]
+p_mix_2 <- function(x,b) {
+  pn <- exp(
+    matrix(rep(c(0,b[1:8]),nrow(x)),byrow=TRUE,nrow(x))
+    +x[,1:9]*b[9]
+    +t(apply(matrix(x[,10],ncol=1),1,function(x) x*c(0,b[10:17])))
+  )
+  pd <- apply(pn,1,sum)
+  return(pn/pd)
+}
+mixl_2 <- optim(function(b) mix_ll(y=y[,-5],x=X_2,b=b,p_mix=p_mix_2),par=rep(0,17),method="BFGS")
+mixl_2$par
+# Compute test statistics
+L_all <- mix_ll(y=y,x=X_1,b=mixl_1$par,p_mix=p_mix_1)
+L_alter <- mix_ll(y=y[,-2],x=X_2,b=mixl_2$par,p_mix=p_mix_2)
+MTT <- 2*(L_all-L_alter)
+csq95 <- qchisq(.95, length(mixl_2$par))
+MTT > csq95
+```
+#### MTT > csq95. IIA is violated.
